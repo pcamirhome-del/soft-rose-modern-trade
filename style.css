@@ -1,0 +1,289 @@
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  font-family: 'Cairo', sans-serif;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  background-color: #000000;
+  color: #ffffff;
+}
+
+/* Default border color */
+* {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Animations */
+@keyframes marquee {
+  0% { transform: translateX(100%); }
+  100% { transform: translateX(-100%); }
+}
+.animate-marquee {
+  animation: marquee 25s linear infinite;
+  display: inline-block;
+  padding-left: 100%;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1); 
+  border-radius: 10px;
+}
+
+/* High Visibility Data Rules - Custom Gray #808080 */
+.bg-custom-gray {
+  background-color: #808080 !important;
+}
+
+select, 
+.bg-gray-700,
+.bg-gray-800,
+input,
+textarea,
+.permission-btn,
+.market-item,
+.company-item {
+  background-color: #374151 !important; /* default darker for general inputs */
+  color: #ffffff !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  border-radius: 0.75rem !important;
+}
+
+/* Prevent auto-zoom on mobile devices (iOS / Android) by ensuring font-size is at least 16px */
+input,
+select,
+textarea,
+input[type="text"],
+input[type="number"],
+input[type="date"],
+input[type="email"],
+input[type="password"],
+input[type="search"],
+input[type="tel"] {
+  font-size: 16px !important;
+}
+
+@media screen and (max-width: 768px) {
+  input,
+  select,
+  textarea,
+  input:focus,
+  select:focus,
+  textarea:focus {
+    font-size: 16px !important;
+  }
+}
+
+/* Specific Gray Override for Inventory & Target Dropdowns */
+#root select.bg-custom-gray,
+#root select[value],
+.target-management-modal select {
+  background-color: #808080 !important;
+  color: white !important;
+}
+
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: left 0.7rem center;
+  background-size: 1em;
+  padding-left: 2.5rem !important;
+}
+
+input::placeholder {
+  color: rgba(255, 255, 255, 0.6) !important;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+}
+
+/* Toast Animation */
+.toast-in {
+  animation: slideInTop 0.5s ease-out forwards;
+}
+
+@keyframes slideInTop {
+  from { transform: translate(-50%, -100%); opacity: 0; }
+  to { transform: translate(-50%, 20px); opacity: 1; }
+}
+
+.star-of-month-gray,
+.bg-\[\#808080\] {
+  background-color: #374151 !important;
+  opacity: 1 !important;
+}
+
+/* Hide scrollbar completely while maintaining scroll functionality */
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+.no-scrollbar {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
+/* Lock background main scroll when any modal is open on both mobile and desktop */
+body.modal-open main {
+  overflow: hidden !important;
+}
+
+/* All modal popups: stay at top and centered */
+.fixed.z-\[9999\],
+.fixed.z-\[99999\],
+.fixed.z-\[10000\],
+.fixed.z-\[120\],
+.fixed.z-\[140\],
+div[class*="fixed"][class*="z-\[999"],
+div[class*="fixed"][class*="z-\[100"],
+div[class*="fixed"][class*="z-\[120"],
+div[class*="fixed"][class*="z-\[140"],
+div[class*="fixed"][class*="z-[999"],
+div[class*="fixed"][class*="z-[100"],
+div[class*="fixed"][class*="z-[120"],
+div[class*="fixed"][class*="z-[140"],
+div[class*="fixed"][class*="inset-0"][class*="bg-black"],
+div[class*="fixed"][class*="top-0"][class*="bg-black"] {
+  display: flex !important;
+  flex-direction: row !important;
+  justify-content: center !important;
+  align-items: flex-start !important;
+  padding-top: 1.5rem !important;
+  padding-bottom: 2.5rem !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+  box-sizing: border-box !important;
+}
+
+/* Ensure inner modal dialog card stays at top and centered */
+.fixed.z-\[9999\] > div,
+.fixed.z-\[99999\] > div,
+.fixed.z-\[10000\] > div,
+.fixed.z-\[120\] > div,
+.fixed.z-\[140\] > div,
+div[class*="fixed"][class*="z-\[999"] > div,
+div[class*="fixed"][class*="z-\[100"] > div,
+div[class*="fixed"][class*="z-\[120"] > div,
+div[class*="fixed"][class*="z-\[140"] > div,
+div[class*="fixed"][class*="z-[999"] > div,
+div[class*="fixed"][class*="z-[100"] > div,
+div[class*="fixed"][class*="z-[120"] > div,
+div[class*="fixed"][class*="z-[140"] > div,
+div[class*="fixed"][class*="inset-0"][class*="bg-black"] > div,
+div[class*="fixed"][class*="top-0"][class*="bg-black"] > div {
+  margin-top: 0 !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  margin-bottom: auto !important;
+}
+
+/* نسخة الهاتف ووضع PWA: ملء الشاشة مع أداء تصفح سريع ومنع شفافية الخلفية خلف الشاشات المنبثقة */
+@media (max-width: 767px) {
+  main,
+  .custom-scrollbar {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* إلغاء الفلتر الضبابي الثقيل في الهاتف لمنع بطء التصفح ومنع ظهور العناصر الخلفية بشفافية */
+  [class*="backdrop-blur"] {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  .fixed.z-\[9999\],
+  .fixed.z-\[99999\],
+  .fixed.z-\[10000\],
+  .fixed.z-\[120\],
+  .fixed.z-\[140\],
+  div[class*="fixed"][class*="z-\[999"],
+  div[class*="fixed"][class*="z-\[100"],
+  div[class*="fixed"][class*="z-\[120"],
+  div[class*="fixed"][class*="z-\[140"],
+  div[class*="fixed"][class*="z-[999"],
+  div[class*="fixed"][class*="z-[100"],
+  div[class*="fixed"][class*="z-[120"],
+  div[class*="fixed"][class*="z-[140"],
+  div[class*="fixed"][class*="inset-0"][class*="bg-black"],
+  div[class*="fixed"][class*="top-0"][class*="bg-black"] {
+    right: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    padding-top: 1rem !important;
+    padding-bottom: 2rem !important;
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+    background-color: rgba(2, 6, 23, 0.98) !important;
+  }
+}
+
+/* في نسخة الكمبيوتر: القائمة الجانبية باليمين بعرض 18rem، الشاشة المنبثقة تكون على يسارها مع مسافة واضحة تفصل بينهما حتى لا تؤثر القائمة الجانبية أو تخفي أي شيء منها وتظل بالأعلى في المنتصف */
+@media (min-width: 768px) {
+  .fixed.z-\[9999\],
+  .fixed.z-\[99999\],
+  .fixed.z-\[10000\],
+  .fixed.z-\[120\],
+  .fixed.z-\[140\],
+  div[class*="fixed"][class*="z-\[999"],
+  div[class*="fixed"][class*="z-\[100"],
+  div[class*="fixed"][class*="z-\[120"],
+  div[class*="fixed"][class*="z-\[140"],
+  div[class*="fixed"][class*="z-[999"],
+  div[class*="fixed"][class*="z-[100"],
+  div[class*="fixed"][class*="z-[120"],
+  div[class*="fixed"][class*="z-[140"],
+  div[class*="fixed"][class*="inset-0"][class*="bg-black"],
+  div[class*="fixed"][class*="top-0"][class*="bg-black"] {
+    right: 18rem !important;
+    left: 0 !important;
+    width: auto !important;
+    max-width: calc(100vw - 18rem) !important;
+    padding-top: 1.5rem !important;
+    padding-bottom: 2.5rem !important;
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
+  }
+
+  .fixed.z-\[9999\] > div,
+  .fixed.z-\[99999\] > div,
+  .fixed.z-\[10000\] > div,
+  .fixed.z-\[120\] > div,
+  .fixed.z-\[140\] > div,
+  div[class*="fixed"][class*="z-\[999"] > div,
+  div[class*="fixed"][class*="z-\[100"] > div,
+  div[class*="fixed"][class*="z-\[120"] > div,
+  div[class*="fixed"][class*="z-\[140"] > div,
+  div[class*="fixed"][class*="z-[999"] > div,
+  div[class*="fixed"][class*="z-[100"] > div,
+  div[class*="fixed"][class*="z-[120"] > div,
+  div[class*="fixed"][class*="z-[140"] > div,
+  div[class*="fixed"][class*="inset-0"][class*="bg-black"] > div,
+  div[class*="fixed"][class*="top-0"][class*="bg-black"] > div {
+    max-width: min(100%, calc(100vw - 18rem - 4rem)) !important;
+  }
+}
+
+/* وعند فتح أي شاشة منبثقة يختفي الشريط العلوي ويظهر بعد غلق الشاشة المنبثقة */
+body.modal-open .app-main-header,
+body.modal-open .app-top-ticker {
+  display: none !important;
+}
+
