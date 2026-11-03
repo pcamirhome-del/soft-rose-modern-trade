@@ -21,11 +21,14 @@ if ('serviceWorker' in navigator) {
 
   window.addEventListener('load', checkForSWUpdate);
   window.addEventListener('online', checkForSWUpdate);
+  window.addEventListener('focus', checkForSWUpdate);
+  window.addEventListener('pageshow', checkForSWUpdate);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       checkForSWUpdate();
     }
   });
+  setInterval(checkForSWUpdate, 60 * 1000);
 }
 
 const rootElement = document.getElementById('root');

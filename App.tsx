@@ -7,7 +7,7 @@ import { User, AppSettings, AppNotification } from './types';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import DailySales from './components/DailySales';
-import SalesLog from './components/SalesLog';
+import SalesLog, { isMenaAhmed, normalizeArabicText } from './components/SalesLog';
 import InventoryRegistration from './components/InventoryRegistration';
 import InventoryLog from './components/InventoryLog';
 import CompetitorPrices from './components/CompetitorPrices';
@@ -313,6 +313,7 @@ const App: React.FC = () => {
     if (!user || user.role === 'admin') return;
     const normName = (user.name || '').trim().toLowerCase();
     const normUser = (user.username || '').trim().toLowerCase();
+    const isUserMena = isMenaAhmed(user.name) || isMenaAhmed(user.username);
 
     let hasTarget = false;
     let hasSale = false;
@@ -328,9 +329,11 @@ const App: React.FC = () => {
         Object.values(val || {}).forEach((t: any) => {
           const tName = (t?.employeeName || '').trim().toLowerCase();
           const tUid = (t?.userId || '').trim().toLowerCase();
+          const isTargetMena = isMenaAhmed(tName) || isMenaAhmed(tUid);
           if (
-            (normName && tName === normName) ||
-            (normUser && (tName === normUser || tUid === normUser)) ||
+            (isUserMena && isTargetMena) ||
+            (normName && (tName === normName || normalizeArabicText(tName) === normalizeArabicText(normName))) ||
+            (normUser && (tName === normUser || tUid === normUser || normalizeArabicText(tName) === normalizeArabicText(normUser))) ||
             (user.key && t?.userId === user.key)
           ) {
             if (Number(t?.finalTarget || t?.targetAmount || 0) > 0) {
@@ -350,7 +353,12 @@ const App: React.FC = () => {
           const s = val[k];
           const sEmp = (s?.employeeName || '').trim().toLowerCase();
           const sUsr = (s?.username || '').trim().toLowerCase();
-          if ((normName && (sEmp === normName || sUsr === normName)) || (normUser && (sEmp === normUser || sUsr === normUser))) {
+          const isSaleMena = isMenaAhmed(sEmp) || isMenaAhmed(sUsr);
+          if (
+            (isUserMena && isSaleMena) ||
+            (normName && (sEmp === normName || sUsr === normName || normalizeArabicText(sEmp) === normalizeArabicText(normName))) ||
+            (normUser && (sEmp === normUser || sUsr === normUser || normalizeArabicText(sEmp) === normalizeArabicText(normUser)))
+          ) {
             hasSale = true;
             break;
           }

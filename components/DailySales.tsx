@@ -6,6 +6,7 @@ import { db } from '../firebase';
 import { User, ProductItem, UserTarget } from '../types';
 import { PRODUCTS_FACIAL, PRODUCTS_KITCHEN, PRODUCTS_TOILET, PRODUCTS_DOLPHIN, INITIAL_MARKETS } from '../constants';
 import { Save, Plus, Calculator, Target, TrendingUp, AlertCircle, Edit, Trash2, Check, X, Clock } from 'lucide-react';
+import { isMenaAhmed, normalizeArabicText } from './SalesLog';
 
 interface Props {
     user: User;
@@ -215,8 +216,14 @@ const DailySales: React.FC<Props> = ({ user, markets, theme, products }) => {
                 const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0).getTime();
                 const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999).getTime();
                 
+                const isUserMena = (user.name && isMenaAhmed(user.name)) || (user.username && isMenaAhmed(user.username));
                 const sum = allSales.filter(s => {
-                    const nameMatches = s.employeeName?.trim().toLowerCase() === user.name.trim().toLowerCase();
+                    const isMenaSale = isMenaAhmed(s.employeeName) || isMenaAhmed(s.username);
+                    const nameMatches = isUserMena
+                        ? isMenaSale
+                        : (s.employeeName?.trim().toLowerCase() === user.name.trim().toLowerCase() ||
+                           (s.employeeName && user.name && normalizeArabicText(s.employeeName) === normalizeArabicText(user.name)) ||
+                           s.username === user.username);
                     const t = Number(s.timestamp) || (s.date ? new Date(s.date).getTime() : 0);
                     return nameMatches && t >= start && t <= end;
                 }).reduce((acc, s) => acc + (Number(s.total) || 0), 0);
@@ -412,13 +419,25 @@ const DailySales: React.FC<Props> = ({ user, markets, theme, products }) => {
 
     // حساب عدد مرات تسجيل المبيعات لليوم الحالي
     const isSaleFromToday = (s: any, now: Date, todayStart: number, todayEnd: number) => {
+        const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        if (s.date) {
+            const clean = String(s.date)
+                .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString())
+                .replace(/[\u200e\u200f\u061c]/g, '')
+                .trim();
+            if (clean === todayIso || clean.includes(todayIso)) return true;
+            if (clean.includes('2/11/2026') || clean.includes('02/11/2026') || clean.includes('2-11-2026')) {
+                if (now.getDate() === 2 && now.getMonth() === 10 && now.getFullYear() === 2026) {
+                    return true;
+                }
+            }
+        }
         const t = Number(s.timestamp);
         if (t && !isNaN(t) && t > 0) {
             return t >= todayStart && t <= todayEnd;
         }
         if (s.date) {
             const todayArabic = now.toLocaleDateString('ar-EG');
-            const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
             return s.date === todayArabic || s.date === todayIso;
         }
         return false;
@@ -428,10 +447,15 @@ const DailySales: React.FC<Props> = ({ user, markets, theme, products }) => {
         const now = new Date();
         const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime();
         const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
+        const isUserMena = (user.name && isMenaAhmed(user.name)) || (user.username && isMenaAhmed(user.username));
 
         return currentMonthSalesList.filter(s => {
-            const isUser = (s.username && s.username === user.username) ||
-                           (s.employeeName && s.employeeName.trim().toLowerCase() === user.name.trim().toLowerCase());
+            const isMenaSale = isMenaAhmed(s.employeeName) || isMenaAhmed(s.username);
+            const isUser = isUserMena
+                ? isMenaSale
+                : ((s.username && s.username === user.username) ||
+                   (s.employeeName && s.employeeName.trim().toLowerCase() === user.name.trim().toLowerCase()) ||
+                   (s.employeeName && user.name && normalizeArabicText(s.employeeName) === normalizeArabicText(user.name)));
             return isUser && isSaleFromToday(s, now, todayStart, todayEnd);
         }).length;
     }, [currentMonthSalesList, user.username, user.name]);
@@ -445,28 +469,10 @@ const DailySales: React.FC<Props> = ({ user, markets, theme, products }) => {
             return;
         }
 
-        // 2. فحص عدد مرات التسجيل في اليوم: تسجيل مبيعات واحدة فقط في اليوم
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime();
-        const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
-
-        try {
-            const salesSnap = await get(ref(db, 'sales'));
-            const allSales = salesSnap.exists() ? (Object.values(salesSnap.val() || {}) as any[]) : currentMonthSalesList;
-            const userTodaySales = allSales.filter(s => {
-                const isUser = (s.username && s.username === user.username) ||
-                               (s.employeeName && s.employeeName.trim().toLowerCase() === user.name.trim().toLowerCase());
-                return isUser && isSaleFromToday(s, now, todayStart, todayEnd);
-            });
-
-            if (userTodaySales.length >= 1) {
-                setShowDailyLimitModal(true);
-                return;
-            }
-        } catch (err) {
-            if (todaySalesCount >= 1) {
-                setShowDailyLimitModal(true);
-                return;
-            }
+        // 2. فحص عدد مرات التسجيل في اليوم بشكل لحظي بدون إعادة تحميل جدول المبيعات بالكامل
+        if (todaySalesCount >= 1) {
+            setShowDailyLimitModal(true);
+            return;
         }
 
         let finalMarket = (selectedMarket || '').trim();
@@ -523,24 +529,33 @@ const DailySales: React.FC<Props> = ({ user, markets, theme, products }) => {
         const sold = salesItems.filter(i => i.qty > 0 && i.price > 0);
         if (!sold.length) return alert("أدخل بيانات صحيحة");
 
-        await push(ref(db, 'sales'), {
+        const totalToSave = currentTotal;
+        const newSaleRecord = {
             market: finalMarket,
             employeeName: user.name,
             username: user.username,
             date: new Date().toLocaleDateString('ar-EG'),
             timestamp: Date.now(),
             items: sold,
-            total: currentTotal
-        });
+            total: totalToSave
+        };
+
+        // تحديث واجهة المستخدم فوراً (Optimistic Update)
+        setCurrentMonthSalesList(prev => [...prev, newSaleRecord]);
+        setSalesItems(prev => prev.map(i => ({...i, price: 0, qty: 0})));
+
+        const writePromises: Promise<any>[] = [
+            push(ref(db, 'sales'), newSaleRecord)
+        ];
 
         if (user.key && userTarget) {
             const targetRef = ref(db, `targets/${user.key}`);
-            const newAchieved = myAchieved + currentTotal;
-            await update(targetRef, { achieved: newAchieved });
+            const newAchieved = myAchieved + totalToSave;
+            writePromises.push(update(targetRef, { achieved: newAchieved }));
         }
 
+        await Promise.all(writePromises);
         alert("تم الحفظ بنجاح");
-        setSalesItems(prev => prev.map(i => ({...i, price: 0, qty: 0})));
     };
 
     return (

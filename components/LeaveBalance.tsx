@@ -260,7 +260,8 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
             ? `تأكيد الأرشفة:\nهل أنت متأكد من أرشفة حساب "${name}"؟\nسيتم إخفاؤه من جميع القوائم المنسدلة والحسابات المسجلة النشطة مع إبقائه في الأرشيف.`
             : `تأكيد استعادة الحساب:\nهل أنت متأكد من استعادة حساب "${name}" وإلغاء الأرشفة؟\nسيتم رجوع الاسم مرة أخرى للظهور في كافة القوائم المنسدلة المسجلة.`;
         if (window.confirm(confirmMsg)) {
-            await update(ref(db, `users/${userId}`), { isArchived: isArchiving });
+            setUsersList(prev => prev.map(u => u.key === userId ? { ...u, isArchived: isArchiving } : u));
+            update(ref(db, `users/${userId}`), { isArchived: isArchiving });
             alert(isArchiving ? `تمت أرشفة حساب "${name}" بنجاح.` : `تمت استعادة حساب "${name}" وإلغاء الأرشفة بنجاح.`);
         }
     };
@@ -369,9 +370,11 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
         if(!confirm("حذف السجل وإعادة الرصيد للموظف؟")) return;
         
         const balanceRef = ref(db, `leave_balances/${record.userId}`);
-        const balanceSnap = await get(balanceRef);
-        if(balanceSnap.exists()) {
-            const bal = balanceSnap.val();
+        const existingBal = balances[record.userId];
+        const writePromises: Promise<any>[] = [];
+
+        if (existingBal) {
+            const bal = { ...existingBal };
             const updates: any = {};
             
             if (record.deductedFromAnnual != null || record.deductedFromCasual != null || record.deductedFromUnpaid != null) {
@@ -393,11 +396,18 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
             }
 
             if (Object.keys(updates).length > 0) {
-                await update(balanceRef, updates);
+                setBalances(prev => ({
+                    ...prev,
+                    [record.userId]: { ...(prev[record.userId] || bal), ...updates }
+                }));
+                writePromises.push(update(balanceRef, updates));
             }
         }
         
-        await remove(ref(db, `leave_history/${id}`));
+        // تحديث فوري للسجل في الواجهة
+        setAllHistory(prev => prev.filter(r => r.id !== id));
+        writePromises.push(remove(ref(db, `leave_history/${id}`)));
+        Promise.all(writePromises).catch(err => console.error("Error deleting leave record:", err));
         alert("تم الحذف وتحديث الرصيد بنجاح");
     };
 
@@ -423,34 +433,36 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
         if (days <= 0) return alert("عدد الأيام يجب أن يكون أكبر من 0");
         if (!editDate) return alert("اختر التاريخ");
 
-        const balanceRef = ref(db, `leave_balances/${editingRecord.userId}`);
-        const balanceSnap = await get(balanceRef);
-        let cur = balanceSnap.exists() ? balanceSnap.val() : { 
-            userId: editingRecord.userId, 
-            employeeName: editingRecord.employeeName || 'Unknown', 
-            annual: 21, 
-            casual: 7, 
-            sick: 0, 
-            exams: 0, 
-            unpaid: 0 
-        };
+        const targetRecord = editingRecord;
+        const balanceRef = ref(db, `leave_balances/${targetRecord.userId}`);
+        let cur: any = balances[targetRecord.userId]
+            ? { ...balances[targetRecord.userId] }
+            : { 
+                userId: targetRecord.userId, 
+                employeeName: targetRecord.employeeName || 'Unknown', 
+                annual: 21, 
+                casual: 7, 
+                sick: 0, 
+                exams: 0, 
+                unpaid: 0 
+            };
 
         // 1. Revert previous deduction
-        if (editingRecord.deductedFromAnnual != null || editingRecord.deductedFromCasual != null || editingRecord.deductedFromUnpaid != null) {
-            if (editingRecord.deductedFromAnnual) {
-                cur.annual = (Number(cur.annual) || 0) + Number(editingRecord.deductedFromAnnual);
+        if (targetRecord.deductedFromAnnual != null || targetRecord.deductedFromCasual != null || targetRecord.deductedFromUnpaid != null) {
+            if (targetRecord.deductedFromAnnual) {
+                cur.annual = (Number(cur.annual) || 0) + Number(targetRecord.deductedFromAnnual);
             }
-            if (editingRecord.deductedFromCasual) {
-                cur.casual = (Number(cur.casual) || 0) + Number(editingRecord.deductedFromCasual);
+            if (targetRecord.deductedFromCasual) {
+                cur.casual = (Number(cur.casual) || 0) + Number(targetRecord.deductedFromCasual);
             }
-            if (editingRecord.deductedFromUnpaid) {
-                cur.unpaid = Math.max(0, (Number(cur.unpaid) || 0) - Number(editingRecord.deductedFromUnpaid));
+            if (targetRecord.deductedFromUnpaid) {
+                cur.unpaid = Math.max(0, (Number(cur.unpaid) || 0) - Number(targetRecord.deductedFromUnpaid));
             }
         } else {
-            const multiplier = typeLogic[editingRecord.type] === 'remaining' ? 1 : -1;
-            cur[editingRecord.type] = (Number(cur[editingRecord.type]) || 0) + (multiplier * Number(editingRecord.days));
-            if (editingRecord.type === 'summer' && editingRecord.deductedFromAnnual !== false) {
-                cur.annual = (Number(cur.annual) || 0) + Number(editingRecord.days);
+            const multiplier = typeLogic[targetRecord.type] === 'remaining' ? 1 : -1;
+            cur[targetRecord.type] = (Number(cur[targetRecord.type]) || 0) + (multiplier * Number(targetRecord.days));
+            if (targetRecord.type === 'summer' && targetRecord.deductedFromAnnual !== false) {
+                cur.annual = (Number(cur.annual) || 0) + Number(targetRecord.days);
             }
         }
 
@@ -588,10 +600,6 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
             cur.penalty = Number((cur as any).penalty || 0) + days;
         }
 
-        if (editType !== 'official') {
-            await set(balanceRef, cur);
-        }
-
         const updatedRecordData: any = {
             date: editDate,
             days: days,
@@ -607,14 +615,31 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
             updatedRecordData.customLabel = null;
         }
 
-        await update(ref(db, `leave_history/${editingRecord.id}`), updatedRecordData);
+        // تحديث فوري للواجهة وإغلاق نافذة التعديل قبل انتظار الشبكة
+        if (editType !== 'official') {
+            setBalances(prev => ({ ...prev, [targetRecord.userId]: cur }));
+        }
+        setAllHistory(prev => prev.map(r => r.id === targetRecord.id ? { ...r, ...updatedRecordData } : r));
         setEditingRecord(null);
+
+        const writePromises: Promise<any>[] = [
+            update(ref(db, `leave_history/${targetRecord.id}`), updatedRecordData)
+        ];
+        if (editType !== 'official') {
+            writePromises.push(set(balanceRef, cur));
+        }
+        Promise.all(writePromises).catch(err => console.error("Error updating leave record:", err));
         alert("تم تعديل الإجازة وتحديث الرصيد بنجاح");
     };
 
     const handleDeleteEmployeeData = async (userId: string, userName: string) => {
         if(!confirm(`هل أنت متأكد من حذف بيانات إجازات الموظف "${userName}" نهائياً؟`)) return;
-        await remove(ref(db, `leave_balances/${userId}`));
+        setBalances(prev => {
+            const next = { ...prev };
+            delete next[userId];
+            return next;
+        });
+        remove(ref(db, `leave_balances/${userId}`));
         alert("تم حذف سجل الرصيد للموظف");
     };
 
@@ -628,9 +653,10 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
             if (isOfficialDuplicate) return alert("تم تسجيل إجازة رسمية في هذا اليوم مسبقاً");
             const ts = new Date(leaveDate).getTime();
             const updates: any = {};
+            const optimisticOfficialRecords: any[] = [];
             usersList.forEach(u => {
                 const newRef = push(ref(db, 'leave_history'));
-                updates[newRef.key!] = {
+                const recObj = {
                     userId: u.key || 'unknown',
                     employeeName: u.name || u.username || 'Unknown',
                     date: leaveDate,
@@ -639,10 +665,13 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
                     customLabel: officialOccasion.trim(),
                     timestamp: ts
                 };
+                updates[newRef.key!] = recObj;
+                optimisticOfficialRecords.push({ id: newRef.key!, ...recObj });
             });
-            await update(ref(db, 'leave_history'), updates);
+            setAllHistory(prev => [...prev, ...optimisticOfficialRecords]);
             setShowAddLeaveModal(false);
             setOfficialOccasion('');
+            update(ref(db, 'leave_history'), updates).catch(err => console.error("Error adding official leave:", err));
             return alert("تم تعميم الإجازة الرسمية بنجاح");
         }
 
@@ -655,8 +684,9 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
         if (isDuplicate) return alert("تم تسجيل هذا اليوم مسبقاً لهذا الموظف");
 
         const balanceRef = ref(db, `leave_balances/${selectedUser}`);
-        const snap = await get(balanceRef);
-        let cur = snap.exists() ? snap.val() : { userId: selectedUser, employeeName: targetUser.name || targetUser.username || 'Unknown', annual: 21, casual: 7, sick: 0, exams: 0, unpaid: 0 };
+        let cur: any = balances[selectedUser]
+            ? { ...balances[selectedUser] }
+            : { userId: selectedUser, employeeName: targetUser.name || targetUser.username || 'Unknown', annual: 21, casual: 7, sick: 0, exams: 0, unpaid: 0 };
         
         const days = Number(leaveDays);
         let effectiveType = leaveType;
@@ -831,8 +861,6 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
             cur.penalty = Number((cur as any).penalty || 0) + days;
             alertMessage = `تم تسجيل جزاء ${days} يوم بنجاح.`;
         }
-
-        await set(balanceRef, cur);
         
         const newLeaveData: any = {
             userId: selectedUser,
@@ -852,13 +880,24 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
             newLeaveData.deductedFromAnnual = deductedFromAnnual;
         }
 
-        await push(ref(db, 'leave_history'), newLeaveData);
+        const newLeaveRef = push(ref(db, 'leave_history'));
+
+        // تحديث لحظي للرصيد والسجل وإغلاق النافذة فوراً بدون انتظار الشبكة
+        setBalances(prev => ({ ...prev, [selectedUser]: cur }));
+        setAllHistory(prev => [...prev, { id: newLeaveRef.key!, ...newLeaveData }]);
+        setShowAddLeaveModal(false);
+        setCustomLeaveName('');
+
+        const writePromises: Promise<any>[] = [
+            set(balanceRef, cur),
+            set(newLeaveRef, newLeaveData)
+        ];
 
         // إرسال إشعار في التطبيق للموظف في حال وجود خصم أو نفاد رصيد
         if (shouldSendInAppNotif && targetUser.key) {
             try {
                 const notifRef = push(ref(db, `notifications/${targetUser.key}`));
-                await set(notifRef, {
+                writePromises.push(set(notifRef, {
                     id: notifRef.key,
                     message: alertMessage,
                     sender: user.name || 'الإدارة',
@@ -867,21 +906,22 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
                     actionType: 'leave',
                     dateString: new Date().toLocaleDateString('ar-EG'),
                     timeString: new Date().toLocaleTimeString('ar-EG')
-                });
+                }));
             } catch (err) {
                 console.error("Error sending leave notification:", err);
             }
         }
         
-        setShowAddLeaveModal(false);
-        setCustomLeaveName('');
+        Promise.all(writePromises).catch(err => console.error("Error saving leave:", err));
         alert(alertMessage);
     };
 
     const handleUpdateBalance = async () => {
         if(!showEditBalanceModal) return;
-        await set(ref(db, `leave_balances/${showEditBalanceModal.userId}`), showEditBalanceModal);
+        const updatedBal = { ...showEditBalanceModal };
+        setBalances(prev => ({ ...prev, [updatedBal.userId]: updatedBal }));
         setShowEditBalanceModal(null);
+        set(ref(db, `leave_balances/${updatedBal.userId}`), updatedBal).catch(err => console.error("Error updating balance:", err));
         alert("تم تحديث الرصيد بنجاح");
     };
 
@@ -1068,27 +1108,46 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
         setShowExportModal(false);
     };
 
-    const activeUsersList = usersList.filter(u => !u.isArchived);
-    const archivedUsersList = usersList.filter(u => u.isArchived);
+    const activeUsersList = useMemo(() => usersList.filter(u => !u.isArchived), [usersList]);
+    const archivedUsersList = useMemo(() => usersList.filter(u => u.isArchived), [usersList]);
 
-    const displayedUsers = user.role === 'admin' 
-        ? (viewArchived ? archivedUsersList : activeUsersList).filter(u => filterUser === 'all' || u.key === filterUser)
-        : activeUsersList.filter(u => u.name === user.name);
+    const displayedUsers = useMemo(() => (
+        user.role === 'admin' 
+            ? (viewArchived ? archivedUsersList : activeUsersList).filter(u => filterUser === 'all' || u.key === filterUser)
+            : activeUsersList.filter(u => u.name === user.name)
+    ), [user.role, user.name, viewArchived, archivedUsersList, activeUsersList, filterUser]);
+
+    const historyByUserMap = useMemo(() => {
+        const map = new Map<string, any[]>();
+        for (let i = 0; i < allHistory.length; i++) {
+            const h = allHistory[i];
+            if (!h || !h.userId) continue;
+            let list = map.get(h.userId);
+            if (!list) {
+                list = [];
+                map.set(h.userId, list);
+            }
+            list.push(h);
+        }
+        return map;
+    }, [allHistory]);
 
     const handleSaveWeekly = async () => {
         if (!weeklyUser || !weeklyDay) return alert("اكمل البيانات");
         const balanceRef = ref(db, `leave_balances/${weeklyUser}`);
-        const snap = await get(balanceRef);
-        let cur = snap.exists() ? snap.val() : { userId: weeklyUser, annual: 21, casual: 7, sick: 0, exams: 0, unpaid: 0 };
+        let cur: any = balances[weeklyUser]
+            ? { ...balances[weeklyUser] }
+            : { userId: weeklyUser, annual: 21, casual: 7, sick: 0, exams: 0, unpaid: 0 };
         
-        const days = cur.weeklyDays || [];
+        const days = [...(cur.weeklyDays || [])];
         if (!days.includes(weeklyDay)) {
             days.push(weeklyDay);
         }
         cur.weeklyDays = days;
-        await set(balanceRef, cur);
-        alert("تم حفظ الإجازة الأسبوعية للحساب");
+        setBalances(prev => ({ ...prev, [weeklyUser]: cur }));
         setShowWeeklyModal(false);
+        set(balanceRef, cur).catch(err => console.error("Error saving weekly leave:", err));
+        alert("تم حفظ الإجازة الأسبوعية للحساب");
     };
 
     const selectedRouteUserName = activeUsersList.find(u => u.key === selectedRouteUser)?.name || '';
@@ -1569,6 +1628,7 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
             return;
         }
         setIsSavingSchedule(true);
+        setAllRouteSchedules(prev => ({ ...prev, [selectedScheduleUser]: currentSchedule }));
         try {
             await set(ref(db, `routeSchedules/${selectedScheduleUser}`), currentSchedule);
             alert('تم حفظ جدول خط السير بنجاح للموظف');
@@ -2494,12 +2554,13 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
                         unpaid: 0
                     };
 
+                    const userAllHistory = historyByUserMap.get(u.key!) || [];
+
                     const curYear = new Date().getFullYear();
                     const yStart = new Date(curYear, 0, 1, 0, 0, 0, 0);
                     const yEnd = new Date(curYear, 11, 31, 23, 59, 59, 999);
 
-                    const userYearHistory = allHistory.filter(h => {
-                        if (h.userId !== u.key) return false;
+                    const userYearHistory = userAllHistory.filter(h => {
                         const hDate = new Date(h.date);
                         return hDate >= yStart && hDate <= yEnd;
                     });
@@ -2517,8 +2578,7 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
                     const pEnd = getPeriodEnd(periodDate);
                     pEnd.setHours(23,59,59,999);
 
-                    const userMonthHistory = allHistory.filter(h => {
-                        if (h.userId !== u.key) return false;
+                    const userMonthHistory = userAllHistory.filter(h => {
                         const hDate = new Date(h.date);
                         return hDate >= pStart && hDate <= pEnd;
                     }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -2642,8 +2702,8 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
                                             </div>
 
                                             {(() => {
-                                                const userSummerLeaves = allHistory
-                                                    .filter(h => h.userId === u.key && h.type === 'summer')
+                                                const userSummerLeaves = userAllHistory
+                                                    .filter(h => h.type === 'summer')
                                                     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
                                                 const totalSummerDays = userSummerLeaves.reduce((s, h) => s + (Number(h.days) || 0), 0) || Number((balance as any).summer || 0);
 
@@ -4040,6 +4100,7 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
             )}
 
             {/* حاوية طباعة وتصدير PDF لجدول سير الموظف المختار */}
+            {(showScheduleModal || isExportingSchedulePDF) && (
             <div
                 ref={schedulePrintContainerRef}
                 style={{
@@ -4112,8 +4173,10 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
                     );
                 })()}
             </div>
+            )}
 
             {/* حاوية طباعة وتصدير PDF لجدول جميع الموظفين */}
+            {(showScheduleModal || isExportingSchedulePDF) && (
             <div
                 ref={allSchedulePrintContainerRef}
                 style={{
@@ -4188,8 +4251,10 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
                     );
                 })()}
             </div>
+            )}
 
             {/* الحاوية المخصصة لتصدير PDF والطباعة بالعرض في ورقة واحدة واخذة مساحة الورقة حتى الحواف */}
+            {(showRouteModal || isExportingRoutePDF) && (
             <div
                 ref={routePrintContainerRef}
                 style={{
@@ -4388,6 +4453,7 @@ const LeaveBalanceComponent: React.FC<Props> = ({ user, theme, openAddLeaveTrigg
                     );
                 })()}
             </div>
+            )}
 
             {/* الحاوية المخصصة لتصدير PDF للسجل الكامل للإجازات والغياب للموظف */}
             {historyUserView && (

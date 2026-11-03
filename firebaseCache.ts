@@ -1,4 +1,5 @@
-import { onValue, DatabaseReference, DataSnapshot } from "firebase/database";
+import { onValue, get, goOnline, DatabaseReference, DataSnapshot } from "firebase/database";
+import { db } from "./firebase";
 
 type SubscriberCallback = (snapshot: any, isCached?: boolean) => void;
 
@@ -7,6 +8,13 @@ const memorySignatures = new Map<string, string>();
 const pendingStorageTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const activeSubscribers = new Map<string, Set<SubscriberCallback>>();
 const activeFirebaseListeners = new Map<string, () => void>();
+const activeRefs = new Map<string, DatabaseReference>();
+
+// Cross-tab & PWA window instant broadcast channel
+const syncChannel: BroadcastChannel | null =
+    typeof window !== "undefined" && "BroadcastChannel" in window
+        ? new BroadcastChannel("soft_rose_realtime_sync")
+        : null;
 
 const IDB_NAME = "SoftRoseLocalCacheDB";
 const IDB_VERSION = 1;
@@ -45,9 +53,9 @@ const openCacheDB = (): Promise<IDBDatabase | null> => {
             }
             const req = window.indexedDB.open(IDB_NAME, IDB_VERSION);
             req.onupgradeneeded = () => {
-                const db = req.result;
-                if (!db.objectStoreNames.contains(IDB_STORE)) {
-                    db.createObjectStore(IDB_STORE);
+                const dbInstance = req.result;
+                if (!dbInstance.objectStoreNames.contains(IDB_STORE)) {
+                    dbInstance.createObjectStore(IDB_STORE);
                 }
             };
             req.onsuccess = () => resolve(req.result);
@@ -60,11 +68,11 @@ const openCacheDB = (): Promise<IDBDatabase | null> => {
 };
 
 const readFromIDB = async (key: string): Promise<any> => {
-    const db = await openCacheDB();
-    if (!db) return undefined;
+    const dbInstance = await openCacheDB();
+    if (!dbInstance) return undefined;
     return new Promise((resolve) => {
         try {
-            const tx = db.transaction(IDB_STORE, "readonly");
+            const tx = dbInstance.transaction(IDB_STORE, "readonly");
             const store = tx.objectStore(IDB_STORE);
             const req = store.get(key);
             req.onsuccess = () => resolve(req.result);
@@ -76,11 +84,11 @@ const readFromIDB = async (key: string): Promise<any> => {
 };
 
 const writeToIDB = async (key: string, value: any): Promise<void> => {
-    const db = await openCacheDB();
-    if (!db) return;
+    const dbInstance = await openCacheDB();
+    if (!dbInstance) return;
     return new Promise((resolve) => {
         try {
-            const tx = db.transaction(IDB_STORE, "readwrite");
+            const tx = dbInstance.transaction(IDB_STORE, "readwrite");
             const store = tx.objectStore(IDB_STORE);
             if (value !== null && value !== undefined) {
                 store.put(value, key);
@@ -117,11 +125,11 @@ const hydrateMemoryFromIDB = (): Promise<void> => {
     if (hydrationPromise) return hydrationPromise;
     requestPersistentStorage();
     hydrationPromise = (async () => {
-        const db = await openCacheDB();
-        if (!db) return;
+        const dbInstance = await openCacheDB();
+        if (!dbInstance) return;
         await new Promise<void>((resolve) => {
             try {
-                const tx = db.transaction(IDB_STORE, "readonly");
+                const tx = dbInstance.transaction(IDB_STORE, "readonly");
                 const store = tx.objectStore(IDB_STORE);
                 const cursorReq = store.openCursor();
                 cursorReq.onsuccess = (event) => {
@@ -185,7 +193,7 @@ const scheduleDevicePersistence = (cacheKey: string, data: any) => {
         } catch (e) {
             /* ignore localStorage quota errors since IndexedDB stores the full data */
         }
-    }, 200);
+    }, 80);
 
     pendingStorageTimers.set(cacheKey, timer);
 };
@@ -201,6 +209,67 @@ const getEffectiveCacheKey = (refObj: DatabaseReference, fallbackKey: string): s
     return fallbackKey;
 };
 
+const emitToSubscribers = (effectiveKey: string, snapshot: any, isCached: boolean) => {
+    const currentSubs = activeSubscribers.get(effectiveKey);
+    if (currentSubs) {
+        currentSubs.forEach((subCallback) => {
+            try {
+                subCallback(snapshot, isCached);
+            } catch (e) {
+                console.error("Error in cached value subscriber:", e);
+            }
+        });
+    }
+};
+
+if (syncChannel) {
+    syncChannel.onmessage = (event) => {
+        const { key, data, refKey } = event.data || {};
+        if (!key) return;
+        memoryCache.set(key, data);
+        memorySignatures.set(key, computeQuickSignature(data));
+        emitToSubscribers(key, createFakeSnapshot(data, refKey || null), false);
+    };
+}
+
+let lastWakeRefresh = 0;
+export const refreshAllActiveListeners = () => {
+    const now = Date.now();
+    if (now - lastWakeRefresh < 400) return;
+    lastWakeRefresh = now;
+
+    try {
+        goOnline(db);
+    } catch (e) {
+        /* ignore */
+    }
+
+    activeRefs.forEach((refObj, effectiveKey) => {
+        const currentSubs = activeSubscribers.get(effectiveKey);
+        if (!currentSubs || currentSubs.size === 0) return;
+        get(refObj)
+            .then((snapshot) => {
+                const data = snapshot.val();
+                memoryCache.set(effectiveKey, data);
+                memorySignatures.set(effectiveKey, computeQuickSignature(data));
+                scheduleDevicePersistence(effectiveKey, data);
+                emitToSubscribers(effectiveKey, snapshot, false);
+            })
+            .catch(() => {});
+    });
+};
+
+if (typeof window !== "undefined") {
+    window.addEventListener("online", refreshAllActiveListeners);
+    window.addEventListener("focus", refreshAllActiveListeners);
+    window.addEventListener("pageshow", refreshAllActiveListeners);
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+            refreshAllActiveListeners();
+        }
+    });
+}
+
 export const onCachedValue = (
     refObj: DatabaseReference,
     cacheKey: string,
@@ -209,6 +278,8 @@ export const onCachedValue = (
     const effectiveKey = getEffectiveCacheKey(refObj, cacheKey);
     let emittedFromCache = false;
     let isUnsubscribed = false;
+
+    activeRefs.set(effectiveKey, refObj);
 
     // Register subscriber in shared pool so switching tabs never tears down & re-downloads Firebase data
     let subs = activeSubscribers.get(effectiveKey);
@@ -267,16 +338,15 @@ export const onCachedValue = (
             memorySignatures.set(effectiveKey, newSig);
             scheduleDevicePersistence(effectiveKey, data);
 
-            const currentSubs = activeSubscribers.get(effectiveKey);
-            if (currentSubs) {
-                currentSubs.forEach((subCallback) => {
-                    try {
-                        subCallback(snapshot, false);
-                    } catch (e) {
-                        console.error("Error in cached value subscriber:", e);
-                    }
-                });
+            if (syncChannel) {
+                try {
+                    syncChannel.postMessage({ key: effectiveKey, data, refKey: refObj.key });
+                } catch (e) {
+                    /* ignore */
+                }
             }
+
+            emitToSubscribers(effectiveKey, snapshot, false);
         });
         activeFirebaseListeners.set(effectiveKey, unsubFirebase);
     }
@@ -289,3 +359,4 @@ export const onCachedValue = (
         }
     };
 };
+

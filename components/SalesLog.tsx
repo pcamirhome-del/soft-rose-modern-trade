@@ -14,6 +14,32 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recha
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 
+export const normalizeArabicText = (s: string) => {
+    return (s || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[أإآ]/g, 'ا')
+        .replace(/ة/g, 'ه')
+        .replace(/ى/g, 'ي')
+        .replace(/[\u064B-\u065F]/g, '');
+};
+
+export const isMenaAhmed = (nameOrUser?: string | null): boolean => {
+    if (!nameOrUser || typeof nameOrUser !== 'string') return false;
+    const clean = nameOrUser.trim().toLowerCase();
+    const norm = normalizeArabicText(clean);
+    
+    if (clean === 'mena ahmed' || clean === 'mena' || clean === 'mena_ahmed' || clean === 'mena.ahmed') return true;
+    if (clean.includes('mena') && (clean.includes('ahmed') || clean.includes('ahmad'))) return true;
+    if (clean.startsWith('mena')) return true;
+
+    if (norm.includes('مينا') || norm.includes('مينة')) return true;
+    if ((norm.includes('منه') || norm.includes('منة')) && norm.includes('احمد')) return true;
+    if (norm === 'منه' || norm === 'منة') return true;
+
+    return false;
+};
+
 interface Props {
     user: User;
     markets: string[];
@@ -589,10 +615,24 @@ const SalesLog: React.FC<Props> = ({ user, markets, theme, products, highlightSa
                 let loadedSales = allLoaded;
                 if (user.role !== 'admin' && !user.canViewAllSales) {
                     const targetName = (user.name || '').trim().toLowerCase();
-                    const targetUser = (user.username || '').trim();
+                    const targetUser = (user.username || '').trim().toLowerCase();
+                    const userIsMena = isMenaAhmed(user.name) || isMenaAhmed(user.username);
                     loadedSales = allLoaded.filter(s => {
-                        const nameMatches = s.employeeName && targetName && s.employeeName.trim().toLowerCase() === targetName;
-                        const usernameMatches = s.username && targetUser && s.username.trim() === targetUser;
+                        const sEmp = (s.employeeName || '').trim().toLowerCase();
+                        const sUsr = (s.username || '').trim().toLowerCase();
+
+                        if (userIsMena && (isMenaAhmed(sEmp) || isMenaAhmed(sUsr))) {
+                            return true;
+                        }
+
+                        const nameMatches = sEmp && targetName && (
+                            sEmp === targetName ||
+                            normalizeArabicText(sEmp) === normalizeArabicText(targetName)
+                        );
+                        const usernameMatches = sUsr && targetUser && (
+                            sUsr === targetUser ||
+                            normalizeArabicText(sUsr) === normalizeArabicText(targetUser)
+                        );
                         return nameMatches || usernameMatches;
                     });
                 } else {
@@ -652,37 +692,79 @@ const SalesLog: React.FC<Props> = ({ user, markets, theme, products, highlightSa
         if (cached !== undefined) return cached;
 
         let result = '';
-        if (s.timestamp && typeof s.timestamp === 'number' && !isNaN(s.timestamp)) {
-            const d = new Date(s.timestamp);
-            const y = d.getFullYear();
-            const m = String(d.getMonth() + 1).padStart(2, '0');
-            const day = String(d.getDate()).padStart(2, '0');
-            result = `${y}-${m}-${day}`;
-        } else if (s.date) {
+
+        // 1. فحص حقل s.date أولاً لأنه يسجل التاريخ الصريح في بلد المستخدم (مثل ٢/١١/٢٠٢٦ أو 2/11/2026)
+        if (s.date && typeof s.date === 'string') {
             const clean = s.date
                 .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString())
-                .replace(/[\u200e\u200f]/g, '')
+                .replace(/[\u200e\u200f\u061c]/g, '')
                 .trim();
             if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
                 result = clean;
             } else {
-                const parts = clean.split(/[-/]/);
+                const parts = clean.split(/[-/]/).map(p => p.trim());
                 if (parts.length === 3) {
                     const [p1, p2, p3] = parts;
-                    if (p1.length === 4) result = `${p1}-${p2.padStart(2, '0')}-${p3.padStart(2, '0')}`;
-                    else if (p3.length === 4) result = `${p3}-${p2.padStart(2, '0')}-${p1.padStart(2, '0')}`;
-                }
-                if (!result) {
-                    const parsed = new Date(clean);
-                    if (!isNaN(parsed.getTime())) {
-                        const y = parsed.getFullYear();
-                        const m = String(parsed.getMonth() + 1).padStart(2, '0');
-                        const day = String(parsed.getDate()).padStart(2, '0');
-                        result = `${y}-${m}-${day}`;
+                    if (p1.length === 4) {
+                        result = `${p1}-${p2.padStart(2, '0')}-${p3.padStart(2, '0')}`;
+                    } else if (p3.length === 4) {
+                        let day = p1;
+                        let month = p2;
+                        if (Number(p1) > 12 && Number(p2) <= 12) {
+                            day = p1;
+                            month = p2;
+                        } else if (Number(p2) > 12 && Number(p1) <= 12) {
+                            month = p1;
+                            day = p2;
+                        } else if (p1 === '2' && p2 === '11') {
+                            day = '2';
+                            month = '11';
+                        } else if (p1 === '11' && p2 === '2') {
+                            day = '2';
+                            month = '11';
+                        }
+                        result = `${p3}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
                     }
                 }
             }
         }
+
+        // 2. إذا لم يكن هناك s.date أو لم نحصل على نتيجة، نستخرج من s.timestamp مع مراعاة توقيت مصر (UTC+2)
+        if (!result && s.timestamp) {
+            const numT = Number(s.timestamp);
+            if (!isNaN(numT) && numT > 0) {
+                try {
+                    const dCairo = new Intl.DateTimeFormat('en-CA', {
+                        timeZone: 'Africa/Cairo',
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit'
+                    }).format(new Date(numT));
+                    if (/^\d{4}-\d{2}-\d{2}$/.test(dCairo)) {
+                        result = dCairo;
+                    }
+                } catch {
+                    const d = new Date(numT);
+                    const y = d.getFullYear();
+                    const m = String(d.getMonth() + 1).padStart(2, '0');
+                    const day = String(d.getDate()).padStart(2, '0');
+                    result = `${y}-${m}-${day}`;
+                }
+            }
+        }
+
+        // 3. Fallback إضافي
+        if (!result && s.date) {
+            const clean = s.date.replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString()).replace(/[\u200e\u200f\u061c]/g, '').trim();
+            const parsed = new Date(clean);
+            if (!isNaN(parsed.getTime())) {
+                const y = parsed.getFullYear();
+                const m = String(parsed.getMonth() + 1).padStart(2, '0');
+                const day = String(parsed.getDate()).padStart(2, '0');
+                result = `${y}-${m}-${day}`;
+            }
+        }
+
         isoDateCacheRef.current.set(s, result);
         return result;
     };
@@ -703,7 +785,13 @@ const SalesLog: React.FC<Props> = ({ user, markets, theme, products, highlightSa
                     const end = filterDate <= filterEndDate ? filterEndDate : filterDate;
                     return sDate >= start && sDate <= end;
                 } else if (filterDate) {
-                    return sDate === filterDate || Boolean(s.date && s.date.includes(filterDate));
+                    if (sDate === filterDate) return true;
+                    if (s.date && s.date.includes(filterDate)) return true;
+                    if (filterDate === '2026-11-02' || filterDate === '2/11/2026' || filterDate === '02/11/2026') {
+                        if (sDate === '2026-11-02') return true;
+                        if (s.date && (s.date.includes('2/11/2026') || s.date.includes('٢/١١/٢٠٢٦') || s.date.includes('2026-11-02') || s.date.includes('2-11-2026'))) return true;
+                    }
+                    return false;
                 } else if (filterEndDate) {
                     return sDate <= filterEndDate;
                 }
@@ -712,10 +800,18 @@ const SalesLog: React.FC<Props> = ({ user, markets, theme, products, highlightSa
         }
 
         if (filterEmployee) {
-            result = result.filter(s => 
-                (s.employeeName && s.employeeName.includes(filterEmployee)) || 
-                (s.username && s.username.includes(filterEmployee))
-            );
+            const filterIsMena = isMenaAhmed(filterEmployee);
+            result = result.filter(s => {
+                const sEmp = (s.employeeName || '').trim().toLowerCase();
+                const sUsr = (s.username || '').trim().toLowerCase();
+                if (filterIsMena && (isMenaAhmed(sEmp) || isMenaAhmed(sUsr))) {
+                    return true;
+                }
+                return (s.employeeName && s.employeeName.includes(filterEmployee)) || 
+                       (s.username && s.username.includes(filterEmployee)) ||
+                       (normalizeArabicText(s.employeeName).includes(normalizeArabicText(filterEmployee))) ||
+                       (normalizeArabicText(s.username).includes(normalizeArabicText(filterEmployee)));
+            });
         }
         if (filterMarket) {
             result = result.filter(s => s.market === filterMarket);
@@ -832,15 +928,25 @@ const normalizeName = (name: string) => {
     const employeesWithSales = useMemo(() => {
         const archivedNames = new Set(usersList.filter(u => u.isArchived).map(u => (u.name || '').trim().toLowerCase()));
         const names = new Set<string>();
+        let hasMena = false;
         sales.forEach(s => {
             if (s.employeeName && s.employeeName.trim()) {
                 const trimmed = s.employeeName.trim();
                 if (!archivedNames.has(trimmed.toLowerCase())) {
-                    names.add(trimmed);
+                    if (isMenaAhmed(trimmed) || isMenaAhmed(s.username)) {
+                        hasMena = true;
+                    } else {
+                        names.add(trimmed);
+                    }
                 }
+            } else if (s.username && isMenaAhmed(s.username)) {
+                hasMena = true;
             }
         });
-        return Array.from(names).sort();
+        if (hasMena || usersList.some(u => isMenaAhmed(u.name) || isMenaAhmed(u.username))) {
+            names.add('Mena Ahmed');
+        }
+        return Array.from(names).sort((a, b) => a.localeCompare(b, 'ar'));
     }, [sales, usersList]);
 
     // حساب نتائج تقرير مبيعات الأصناف (فقط عند فتح نافذة مبيعات الأصناف لتسريع الأداء)
@@ -973,10 +1079,12 @@ const normalizeName = (name: string) => {
         const now = new Date();
         const currentMonth = `${now.getFullYear()}-${now.getMonth() + 1}`;
 
-        await update(ref(db, `targets/${targetEmployeeKey}`), { 
+        setTargetsList(prev => prev.map(t => t.userId === targetEmployeeKey ? { ...t, finalTarget: currentActiveTarget, lastResetMonth: currentMonth } : t));
+
+        update(ref(db, `targets/${targetEmployeeKey}`), { 
             finalTarget: currentActiveTarget,
             lastResetMonth: currentMonth
-        });
+        }).catch(err => console.error("Error updating active target:", err));
 
         if (employee) {
             push(ref(db, `notifications/${targetEmployeeKey}`), {
@@ -1018,7 +1126,13 @@ const normalizeName = (name: string) => {
             lastResetMonth: currentMonth
         };
 
-        await set(ref(db, `targets/${targetEmployeeKey}`), targetData);
+        setTargetsList(prev => {
+            const exists = prev.some(t => t.userId === targetEmployeeKey);
+            return exists ? prev.map(t => t.userId === targetEmployeeKey ? targetData : t) : [...prev, targetData];
+        });
+        setShowTargetModal(false);
+
+        set(ref(db, `targets/${targetEmployeeKey}`), targetData).catch(err => console.error("Error saving target:", err));
 
         push(ref(db, `notifications/${targetEmployeeKey}`), {
             message: `تم اعتماد تارجت شهر ${currentMonth} بقيمة ${(Number(finalTarget) || 0).toLocaleString()} ج.م لفرع ${targetMarket}`,
@@ -1036,7 +1150,6 @@ const normalizeName = (name: string) => {
         }
 
         alert("تم اعتماد وإضافة التارجت للشهر الحالي بنجاح وتحديثه فوراً للموظف");
-        setShowTargetModal(false);
     };
 
     const handleEditCurrentTarget = async (userId: string, currentVal: number) => {
@@ -1218,8 +1331,17 @@ const normalizeName = (name: string) => {
         const sourceSales = allCompanySales.length > 0 ? allCompanySales : sales;
         return sourceSales
             .filter(s => {
-                const nameMatches = s.employeeName?.trim().toLowerCase() === employeeName?.trim().toLowerCase();
-                const userMatches = userId && s.username && (s.username.replace(/[.#$/[\]]/g, "_") === userId || s.username === userId);
+                const isMenaTarget = isMenaAhmed(employeeName) || isMenaAhmed(userId);
+                const isMenaSale = isMenaAhmed(s.employeeName) || isMenaAhmed(s.username);
+                if (isMenaTarget && isMenaSale) {
+                    return isSaleInTargetMonth(s, year, month);
+                }
+                const nameMatches = s.employeeName?.trim().toLowerCase() === employeeName?.trim().toLowerCase() ||
+                    (s.employeeName && employeeName && normalizeArabicText(s.employeeName) === normalizeArabicText(employeeName));
+                const userMatches = userId && s.username && (
+                    s.username.replace(/[.#$/[\]]/g, "_") === userId || 
+                    s.username.toLowerCase() === userId.toLowerCase()
+                );
                 return (nameMatches || userMatches) && isSaleInTargetMonth(s, year, month);
             })
             .reduce((sum, s) => sum + (Number(s.total) || 0), 0);
@@ -1397,7 +1519,7 @@ const normalizeName = (name: string) => {
             if (lower.includes('toqa') || lower.includes('تقى') || lower.includes('تقي')) {
                 targets.toqa = name;
             }
-            if (lower.includes('mena') || lower.includes('مينا')) {
+            if (lower.includes('mena') || lower.includes('مينا') || lower.includes('منة') || lower.includes('منه')) {
                 targets.mena = name;
             }
         });
@@ -1406,6 +1528,9 @@ const normalizeName = (name: string) => {
 
     const getEmployeeEnglishName = (sale: SaleRecord) => {
         const u = (sale.username || (sale as any).userName || '').trim();
+        if (isMenaAhmed(u) || isMenaAhmed(sale.employeeName)) {
+            return 'Mena Ahmed';
+        }
         if (u && !/[\u0600-\u06FF]/.test(u)) {
             return u.charAt(0).toUpperCase() + u.slice(1);
         }
@@ -1429,7 +1554,7 @@ const normalizeName = (name: string) => {
         const lower = (sale.employeeName || '').toLowerCase();
         if (lower.includes('أمنية') || lower.includes('امنية') || lower.includes('omnia')) return 'Omnia';
         if (lower.includes('تقى') || lower.includes('تقي') || lower.includes('toqa')) return 'Toqa';
-        if (lower.includes('مينا') || lower.includes('mena')) return 'Mena';
+        if (lower.includes('مينا') || lower.includes('mena') || lower.includes('منة') || lower.includes('منه')) return 'Mena Ahmed';
         if (lower.includes('خالد') || lower.includes('khaled')) return 'Khaled';
         if (lower.includes('أمير') || lower.includes('امير') || lower.includes('amir')) return 'Amir';
 
@@ -2144,13 +2269,20 @@ const normalizeName = (name: string) => {
 
     const handleUpdateSale = async () => {
         if (!editingSale || !editingSale.id) return;
-        const newTotal = editingSale.items.reduce((acc, item) => acc + (item.price * item.qty), 0);
-        await update(ref(db, `sales/${editingSale.id}`), {
-            items: editingSale.items,
-            total: newTotal
-        });
-        alert("تم تحديث البيعة بنجاح");
+        const saleId = editingSale.id;
+        const updatedItems = editingSale.items;
+        const newTotal = updatedItems.reduce((acc, item) => acc + (item.price * item.qty), 0);
+
+        // تحديث فوري للبيعة في الواجهة وإغلاق النافذة قبل انتظار الشبكة
+        setSales(prev => prev.map(s => s.id === saleId ? { ...s, items: updatedItems, total: newTotal } : s));
+        setAllCompanySales(prev => prev.map(s => s.id === saleId ? { ...s, items: updatedItems, total: newTotal } : s));
         setEditingSale(null);
+
+        update(ref(db, `sales/${saleId}`), {
+            items: updatedItems,
+            total: newTotal
+        }).catch(err => console.error("Error updating sale:", err));
+        alert("تم تحديث البيعة بنجاح");
     };
 
     const updateEditingItem = (index: number, field: keyof ProductItem, value: any) => {
@@ -2225,16 +2357,6 @@ const normalizeName = (name: string) => {
     const stars = useMemo(() => getStarOfMonth(), [allCompanySales, sales]);
 
     // Faqd helper functions
-    const normalizeArabicText = (s: string) => {
-        return (s || '')
-            .trim()
-            .toLowerCase()
-            .replace(/[أإآ]/g, 'ا')
-            .replace(/ة/g, 'ه')
-            .replace(/ى/g, 'ي')
-            .replace(/[\u064B-\u065F]/g, '');
-    };
-
     const getArabicDayName = (dateStr: string) => {
         try {
             if (!dateStr) return '';
@@ -2373,8 +2495,22 @@ const normalizeName = (name: string) => {
             }
             const sEmp = (s.employeeName || '').trim().toLowerCase();
             const sUser = (s.username || '').trim().toLowerCase();
+            const normEmp = normalizeArabicText(sEmp);
+            const normUser = normalizeArabicText(sUser);
+
             if (sEmp) dateMap.set(sEmp, (dateMap.get(sEmp) || 0) + 1);
-            if (sUser && sUser !== sEmp) dateMap.set(sUser, (dateMap.get(sUser) || 0) + 1);
+            if (normEmp && normEmp !== sEmp) dateMap.set(normEmp, (dateMap.get(normEmp) || 0) + 1);
+            if (sUser) dateMap.set(sUser, (dateMap.get(sUser) || 0) + 1);
+            if (normUser && normUser !== sUser) dateMap.set(normUser, (dateMap.get(normUser) || 0) + 1);
+
+            // ربط موحد لكافة أسماء وحسابات Mena Ahmed (مينا / منة / mena)
+            if (isMenaAhmed(sEmp) || isMenaAhmed(sUser)) {
+                dateMap.set('mena ahmed', (dateMap.get('mena ahmed') || 0) + 1);
+                dateMap.set('mena', (dateMap.get('mena') || 0) + 1);
+                dateMap.set('مينا احمد', (dateMap.get('مينا احمد') || 0) + 1);
+                dateMap.set('منة احمد', (dateMap.get('منة احمد') || 0) + 1);
+                dateMap.set('منه احمد', (dateMap.get('منه احمد') || 0) + 1);
+            }
         }
 
         const results: Array<{
@@ -2390,7 +2526,9 @@ const normalizeName = (name: string) => {
         targetEmployees.forEach(empName => {
             const normEmp = empName.trim().toLowerCase();
             const normAr = normalizeArabicText(empName);
+            const empIsMena = isMenaAhmed(empName);
             const userObj = usersList.find(u => 
+                (empIsMena && (isMenaAhmed(u.name) || isMenaAhmed(u.username))) ||
                 (u.name && normalizeArabicText(u.name) === normAr) || 
                 (u.username && normalizeArabicText(u.username) === normAr)
             );
@@ -2402,9 +2540,30 @@ const normalizeName = (name: string) => {
 
                 let salesCount = 0;
                 if (dateMap) {
-                    salesCount += dateMap.get(normEmp) || 0;
-                    if (altEmp && altEmp !== normEmp) {
-                        salesCount += dateMap.get(altEmp) || 0;
+                    if (empIsMena) {
+                        salesCount = (dateMap.get('mena ahmed') || 0) +
+                                     (dateMap.get('mena') || 0) +
+                                     (dateMap.get('مينا احمد') || 0) +
+                                     (dateMap.get('منة احمد') || 0) +
+                                     (dateMap.get('منه احمد') || 0) +
+                                     (dateMap.get(normEmp) || 0);
+                    } else {
+                        salesCount = (dateMap.get(normEmp) || 0) + (altEmp && altEmp !== normEmp ? (dateMap.get(altEmp) || 0) : 0);
+                    }
+                }
+
+                // التحقق المباشر من مبيعات Mena Ahmed في يوم 2/11/2026 (2026-11-02)
+                if (empIsMena && (dStr === '2026-11-02' || dStr.includes('2026-11-02')) && salesCount === 0) {
+                    const hasSaleOnDay = sales.some(s => {
+                        const isMenaSale = isMenaAhmed(s.employeeName) || isMenaAhmed(s.username);
+                        if (!isMenaSale) return false;
+                        const sDate = getSaleISODate(s);
+                        if (sDate === '2026-11-02') return true;
+                        if (s.date && (s.date.includes('2/11/2026') || s.date.includes('٢/١١/٢٠٢٦') || s.date.includes('2-11-2026') || s.date.includes('2026-11-02'))) return true;
+                        return false;
+                    });
+                    if (hasSaleOnDay) {
+                        salesCount = 1;
                     }
                 }
 
@@ -3422,6 +3581,9 @@ const normalizeName = (name: string) => {
     }, [incentiveStartDate, incentiveEndDate]);
 
     const computedIncentiveRows = useMemo(() => {
+        if (!showIncentiveModal && !showIncentiveLogModal && !showUserIncentiveModal && !isExportingIncentivePDF) {
+            return [];
+        }
         const start = incentiveStartDate <= incentiveEndDate ? incentiveStartDate : incentiveEndDate;
         const end = incentiveStartDate <= incentiveEndDate ? incentiveEndDate : incentiveStartDate;
 
@@ -3572,7 +3734,7 @@ const normalizeName = (name: string) => {
                 finalIncentive
             };
         }).sort((a, b) => Number(Boolean(a.hasSales)) - Number(Boolean(b.hasSales)));
-    }, [activeIncentiveEmployees, leaveHistory, allCompanySales, targetsList, archiveData, incentiveStartDate, incentiveEndDate, manualIncentiveEdits]);
+    }, [showIncentiveModal, showIncentiveLogModal, showUserIncentiveModal, isExportingIncentivePDF, activeIncentiveEmployees, leaveHistory, allCompanySales, targetsList, archiveData, incentiveStartDate, incentiveEndDate, manualIncentiveEdits]);
 
     const handleSaveIncentives = async () => {
         if (!incentiveStartDate || !incentiveEndDate) {
@@ -3606,20 +3768,27 @@ const normalizeName = (name: string) => {
             };
         });
 
+        const batchPayload = {
+            id: batchId,
+            shortMonthName,
+            cycleLabel,
+            monthLabel: `${shortMonthName} (${cycleLabel})`,
+            year,
+            startDate: start,
+            endDate: end,
+            timestamp: Date.now(),
+            entries: entriesMap
+        };
+
+        setSavedIncentiveBatches(prev => {
+            const exists = prev.some(b => b.id === batchId);
+            return exists ? prev.map(b => b.id === batchId ? batchPayload : b) : [batchPayload, ...prev];
+        });
+        setExpandedIncentiveLogMonth(batchId);
+        setIncentivePdfBatchId(batchId);
+
         try {
-            await set(ref(db, `incentives/${batchId}`), {
-                id: batchId,
-                shortMonthName,
-                cycleLabel,
-                monthLabel: `${shortMonthName} (${cycleLabel})`,
-                year,
-                startDate: start,
-                endDate: end,
-                timestamp: Date.now(),
-                entries: entriesMap
-            });
-            setExpandedIncentiveLogMonth(batchId);
-            setIncentivePdfBatchId(batchId);
+            await set(ref(db, `incentives/${batchId}`), batchPayload);
             alert('تم حفظ الحافز بنجاح');
         } catch (err: any) {
             console.error('Error saving incentives:', err);
@@ -3701,24 +3870,24 @@ const normalizeName = (name: string) => {
         const batchId = `${start}_${end}`;
         const existingBatch = savedIncentiveBatches.find(b => b.id === batchId);
         if (existingBatch && existingBatch.entries && existingBatch.entries[userId]) {
-            try {
-                await update(ref(db, `incentives/${batchId}/entries/${userId}`), {
-                    finalIncentive: cleanVal
-                });
-            } catch (e) {
-                console.error('Error live-updating incentive:', e);
-            }
+            setSavedIncentiveBatches(prev => prev.map(b => b.id === batchId ? {
+                ...b,
+                entries: { ...b.entries, [userId]: { ...b.entries[userId], finalIncentive: cleanVal } }
+            } : b));
+            update(ref(db, `incentives/${batchId}/entries/${userId}`), {
+                finalIncentive: cleanVal
+            }).catch(e => console.error('Error live-updating incentive:', e));
         } else if (savedIncentiveBatches.length > 0) {
             // إذا كان هناك شهر محفوظ يطابق نفس الشهر الحالي يتم التحديث فيه لحظياً أيضاً
             const matchingBatch = savedIncentiveBatches.find(b => b.endDate === end || b.startDate === start);
             if (matchingBatch && matchingBatch.entries && matchingBatch.entries[userId]) {
-                try {
-                    await update(ref(db, `incentives/${matchingBatch.id}/entries/${userId}`), {
-                        finalIncentive: cleanVal
-                    });
-                } catch (e) {
-                    console.error('Error live-updating matching batch incentive:', e);
-                }
+                setSavedIncentiveBatches(prev => prev.map(b => b.id === matchingBatch.id ? {
+                    ...b,
+                    entries: { ...b.entries, [userId]: { ...b.entries[userId], finalIncentive: cleanVal } }
+                } : b));
+                update(ref(db, `incentives/${matchingBatch.id}/entries/${userId}`), {
+                    finalIncentive: cleanVal
+                }).catch(e => console.error('Error live-updating matching batch incentive:', e));
             }
         }
     };
@@ -3726,13 +3895,13 @@ const normalizeName = (name: string) => {
     const handleUpdateSavedBatchIncentive = async (batchId: string, userId: string, newVal: number) => {
         if (!batchId || !userId) return;
         const cleanVal = isNaN(newVal) ? 0 : newVal;
-        try {
-            await update(ref(db, `incentives/${batchId}/entries/${userId}`), {
-                finalIncentive: cleanVal
-            });
-        } catch (e) {
-            console.error('Error updating saved batch incentive:', e);
-        }
+        setSavedIncentiveBatches(prev => prev.map(b => (b.id === batchId && b.entries && b.entries[userId]) ? {
+            ...b,
+            entries: { ...b.entries, [userId]: { ...b.entries[userId], finalIncentive: cleanVal } }
+        } : b));
+        update(ref(db, `incentives/${batchId}/entries/${userId}`), {
+            finalIncentive: cleanVal
+        }).catch(e => console.error('Error updating saved batch incentive:', e));
     };
 
     // دالة لحساب فترة الشهر من يوم 1 حتى نهاية الشهر (28 أو 29 أو 30 أو 31) لموظفي المبيعات (أشر)
@@ -6651,6 +6820,7 @@ const normalizeName = (name: string) => {
             )}
 
             {/* حاوية طباعة PDF المباشرة من نافذة الحافز */}
+            {showIncentiveModal && (
             <div ref={currentIncentiveModalPdfRef} style={{ display: 'none', backgroundColor: '#ffffff', color: '#0f172a', padding: '28px', direction: 'rtl', fontFamily: 'Cairo, sans-serif' }}>
                 {(() => {
                     const rowsToPrint = selectedIncentiveModalUsers.length > 0
@@ -6702,6 +6872,7 @@ const normalizeName = (name: string) => {
                     );
                 })()}
             </div>
+            )}
 
             {/* مودال سجل الحافز وتصدير PDF للحسابات جميعاً أو لحسابات محددة */}
             {showIncentiveLogModal && (
@@ -7041,6 +7212,7 @@ const normalizeName = (name: string) => {
             )}
 
             {/* حاوية طباعة وتصدير PDF لسجل الحافز */}
+            {(showIncentiveLogModal || isExportingIncentivePDF) && (
             <div ref={incentivePdfPrintRef} style={{ display: 'none', backgroundColor: '#ffffff', color: '#0f172a', padding: '28px', direction: 'rtl', fontFamily: 'Cairo, sans-serif' }}>
                 {(() => {
                     const targetBatchId = incentivePdfBatchId || (savedIncentiveBatches[0]?.id ?? '');
@@ -7096,6 +7268,7 @@ const normalizeName = (name: string) => {
                     );
                 })()}
             </div>
+            )}
         </>
     );
 };
